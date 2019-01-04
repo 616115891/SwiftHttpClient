@@ -55,6 +55,148 @@ class HttpClient: NSObject,URLSessionDelegate {
 		return url
 	}
 	
+	func postImages(toServer strUrl: String, dicPostParams params: NSMutableDictionary?, imageArray: [Any]?, file fileArray: [Any]?, imageName imageNameArray: [Any]?,completion:@escaping (Data?,Error?) -> Void) {
+		
+		DispatchQueue.global(qos: .default).async{ [weak self] in
+			//分界线的标识符
+			let TWITTERFON_FORM_BOUNDARY = "******"
+			let url = URL(string: strUrl)
+			var request: URLRequest!
+			if let url = url {
+				request = URLRequest(url: url)
+			}
+			//分界线 --AaB03x
+			let MPboundary = "--\(TWITTERFON_FORM_BOUNDARY)"
+			//结束符 AaB03x--
+			let endMPboundary = "\(MPboundary)--"
+			//要上传的图片
+			var image: UIImage?
+			
+			//将要上传的图片压缩 并赋值与上传的Data数组
+			var imageDataArray: [Data] = []
+			for i in 0..<(imageArray?.count ?? 0) {
+				//要上传的图片
+				image = imageArray?[i] as? UIImage
+				//*************  将图片压缩成我们需要的数据包大小 ******************
+				var data: Data? = nil
+				if let image = image {
+					data = image.jpegData(compressionQuality: 1.0)
+				}
+				var dataKBytes: CGFloat = CGFloat(Double((data?.count ?? 0)) / 1000.0)
+				var maxQuality: CGFloat = 0.9
+				var lastData: CGFloat = dataKBytes
+				while dataKBytes > 1024 && maxQuality > 0.01 {
+					//将图片压缩成1M
+					maxQuality = maxQuality - 0.01
+					if let image = image {
+						data = image.jpegData(compressionQuality: maxQuality)
+					}
+					dataKBytes = CGFloat(Double((data?.count ?? 0)) / 1000.0)
+					if lastData == dataKBytes {
+						break
+					} else {
+						lastData = dataKBytes
+					}
+				}
+				//*************  将图片压缩成我们需要的数据包大小 ******************
+				if let data = data {
+					imageDataArray.append(data)
+				}
+			}
+			
+			//http body的字符串
+			var body = ""
+			//参数的集合的所有key的集合
+			guard let params = params else {
+				return
+			}
+			var keys = params.allKeys
+			
+			//遍历keys
+			for i in 0..<keys.count{
+				//得到当前key
+				let key = keys[i] as? String
+				
+				//添加分界线，换行
+				body += "\(MPboundary)\r\n"
+				//添加字段名称，换2行
+				body += "Content-Disposition: form-data; name=\"\(key ?? "")\"\r\n\r\n"
+				
+				//添加字段的值
+				if let object = params[key ?? ""] {
+					body += "\(object)\r\n"
+				}
+			}
+			
+			//声明myRequestData，用来放入http body
+			var myRequestData = Data()
+			//将body字符串转化为UTF8格式的二进制
+			if let data = body.data(using: .utf8) {
+				myRequestData.append(data)
+			}
+			
+			guard let fileArray = fileArray,let imageNameArray = imageNameArray else {
+				return
+			}
+			
+			//循环加入上传图片
+			for i in 0..<imageDataArray.count {
+				//要上传的图片
+				//得到图片的data
+				let data = imageDataArray[i]
+				var imgbody = ""
+				//此处循环添加图片文件
+				//添加图片信息字段
+				////添加分界线，换行
+				imgbody += "\(MPboundary)\r\n"
+				imgbody += "Content-Disposition: form-data; name=\"\(fileArray[i])\"; filename=\"\(imageNameArray[i]).jpg\"\r\n"
+				//声明上传文件的格式
+				imgbody += "Content-Type: application/octet-stream; charset=utf-8\r\n\r\n"
+				
+				//将body字符串转化为UTF8格式的二进制
+				if let data = imgbody.data(using: .utf8) {
+					myRequestData.append(data)
+				}
+				//将image的data加入
+				myRequestData.append(data)
+				if let data = "\r\n".data(using: .utf8) {
+					myRequestData.append(data)
+				}
+			}
+			//声明结束符：--AaB03x--
+			let end = "\(endMPboundary)\r\n"
+			//加入结束符--AaB03x--
+			if let data = end.data(using: .utf8) {
+				myRequestData.append(data)
+			}
+			
+			//设置HTTPHeader中Content-Type的值
+			let content = "multipart/form-data; boundary=\(TWITTERFON_FORM_BOUNDARY)"
+			//设置HTTPHeader
+			request.setValue(content, forHTTPHeaderField: "Content-Type")
+			//设置Content-Length
+			request.setValue(String(format: "%lu", UInt(myRequestData.count)), forHTTPHeaderField: "Content-Length")
+			request.timeoutInterval = timeoutInterval
+			request.httpBody = myRequestData
+			request.httpMethod = "POST"
+			guard let strongSelf = self else {
+				return
+			}
+			strongSelf.session.dataTask(with: request, completionHandler: { (data, response, error) in
+				guard let _ = self else { return } //弱引用
+				if let data = data {
+					if error == nil {
+						completion(data,nil)
+					}else {
+						completion(nil,error)
+					}
+				}else {
+					completion(nil,error)
+				}
+			})
+		}
+	}
+	
 	func httpRequest(with path:String,requestType type:RequestType,paramOfType paramType:ParamType,parameter param:Any?,completion:@escaping (Data?,Error?) -> Void) -> URLSessionDataTask {
 		var request = URLRequest(url: URL(string: path)!)
 		request.timeoutInterval = timeoutInterval
@@ -103,17 +245,8 @@ class HttpClient: NSObject,URLSessionDelegate {
         switch type {
         case .GET:
             request.httpMethod = "GET"
-			if let param = param {
-				do {
-					let data = try JSONSerialization.data(withJSONObject: param, options: .prettyPrinted)
-					request.httpBody = data
-				} catch {
-					print(error)
-				}
-			}
         case .POST:
             request.httpMethod = "POST"
-			
 		}
 		let task = session.dataTask(with: request, completionHandler: { [weak self] (data, response, error) in
 			guard let _ = self else { return } //弱引用
